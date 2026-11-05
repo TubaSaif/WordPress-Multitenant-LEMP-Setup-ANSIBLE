@@ -1,0 +1,218 @@
+---
+# Runs once per site. Variables: tenant, site, t_user, t_root
+- name: Derive site facts (1/2)
+  ansible.builtin.set_fact:
+    s_domain: "{{ site.domain }}"
+    s_type: "{{ site.type | default('single') }}"
+    s_mode: "{{ site.multisite_mode | default('subdomain') }}"
+    s_ssl: "{{ site.ssl | default(false) | bool }}"
+    s_wildcard: "{{ site.wildcard_ssl | default(false) | bool }}"
+    s_root: "{{ t_root }}/sites/{{ site.domain }}"
+    s_web: "{{ t_root }}/sites/{{ site.domain }}/public"
+    s_db: "{{ site.db_name | default((tenant.name ~ '_' ~ (site.domain | regex_replace('[^a-z0-9]', '_')))[:32]) }}"
+    s_admin_user: "{{ site.admin_user | default(tenant.name) }}"
+    s_admin_email: "{{ site.admin_email | default(tenant.email) }}"
+    s_title: "{{ site.title | default(site.domain) }}"
+
+- name: Derive site facts (2/2) - secrets live in ./credentials on the control node
+  ansible.builtin.set_fact:
+    s_url: "{{ 'https' if s_ssl else 'http' }}://{{ s_domain }}"
+    s_names: >-
+      {{ [s_domain] + (site.aliases | default([]))
+         + (['*.' ~ s_domain] if (s_type == 'multisite' and s_mode == 'subdomain') else []) }}
+    s_cert_domains: >-
+      {{ [s_domain, '*.' ~ s_domain] if s_wildcard else [s_domain] + (site.aliases | default([])) }}
+    s_db_pass: "{{ lookup('ansible.builtin.password', playbook_dir ~ '/credentials/' ~ site.domain ~ '/db_password length=32 chars=ascii_letters,digits') }}"
+    s_admin_pass: "{{ lookup('ansible.builtin.password', playbook_dir ~ '/credentials/' ~ site.domain ~ '/wp_admin_password length=24 chars=ascii_letters,digits') }}"
+  no_log: true
+
+- name: Wildcard certificates need a Cloudflare API token
+  ansible.builtin.assert:
+    that: cloudflare_api_token | length > 0
+    fail_msg: "{{ s_domain }} uses wildcard_ssl but cloudflare_api_token is empty (see group_vars/wordpress/vault.yml.example)."
+    quiet: true
+  when: s_ssl and s_wildcard
+
+- name: Warn about multisite-subdomain without wildcard cert
+  ansible.builtin.debug:
+    msg: "{{ s_domain }}: multisite subdomain network without wildcard_ssl - sub-sites will not be covered by the certificate."
+  when: s_type == 'multisite' and s_mode == 'subdomain' and s_ssl and not s_wildcard
+
+# ---------------- filesystem ----------------
+- name: Site directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ t_user }}"
+    group: www-data
+    mode: "0750"
+  loop: ["{{ s_root }}", "{{ s_web }}"]
+
+# ---------------- database ----------------
+# Plain SQL over the root unix socket: idempotent, no extra Python deps.
+- name: Validate DB name
+  ansible.builtin.assert:
+    that: s_db is match('^[a-z0-9_]{1,32}$')
+    fail_msg: "db_name must match [a-z0-9_] and be <= 32 chars (got '{{ s_db }}')."
+    quiet: true
+
+- name: Database + dedicated DB user (privileges on this DB only)
+  ansible.builtin.command:
+    argv:
+      - mysql
+      - -e
+      - >-
+        CREATE DATABASE IF NOT EXISTS `{{ s_db }}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+        CREATE USER IF NOT EXISTS '{{ s_db }}'@'localhost' IDENTIFIED BY '{{ s_db_pass }}';
+        ALTER USER '{{ s_db }}'@'localhost' IDENTIFIED BY '{{ s_db_pass }}';
+        GRANT ALL PRIVILEGES ON `{{ s_db }}`.* TO '{{ s_db }}'@'localhost';
+  changed_when: false
+  no_log: true
+
+# ---------------- WordPress (runs as the tenant user) ----------------
+- name: WordPress install
+  become: true
+  become_user: "{{ t_user }}"
+  environment:
+    WP_CLI_CACHE_DIR: "{{ t_root }}/tmp/wp-cli-cache"
+  block:
+    - name: Download WordPress core
+      ansible.builtin.command:
+        argv: ["{{ wp_bin }}", core, download, "--path={{ s_web }}", "--locale={{ wp_locale }}"]
+        creates: "{{ s_web }}/wp-includes/version.php"
+        chdir: "{{ s_web }}"
+
+    - name: Create wp-config.php
+      ansible.builtin.command:
+        argv:
+          - "{{ wp_bin }}"
+          - config
+          - create
+          - "--path={{ s_web }}"
+          - "--dbname={{ s_db }}"
+          - "--dbuser={{ s_db }}"
+          - "--dbpass={{ s_db_pass }}"
+          - "--dbhost=localhost"
+          - "--dbcharset=utf8mb4"
+          - "--locale={{ wp_locale }}"
+        creates: "{{ s_web }}/wp-config.php"
+        chdir: "{{ s_web }}"
+      no_log: true
+
+    - name: Is WordPress installed?
+      ansible.builtin.command:
+        argv: "{{ [wp_bin, 'core', 'is-installed', '--path=' ~ s_web] + (['--network'] if s_type == 'multisite' else []) }}"
+        chdir: "{{ s_web }}"
+      register: wp_installed
+      failed_when: false
+      changed_when: false
+
+    - name: Install WordPress (single site)
+      ansible.builtin.command:
+        argv:
+          - "{{ wp_bin }}"
+          - core
+          - install
+          - "--path={{ s_web }}"
+          - "--url={{ s_url }}"
+          - "--title={{ s_title }}"
+          - "--admin_user={{ s_admin_user }}"
+          - "--admin_password={{ s_admin_pass }}"
+          - "--admin_email={{ s_admin_email }}"
+          - "--skip-email"
+        chdir: "{{ s_web }}"
+      when: wp_installed.rc | default(1) != 0 and s_type == 'single'
+      no_log: true
+
+    - name: Install WordPress (multisite network)
+      ansible.builtin.command:
+        argv: >-
+          {{ [wp_bin, 'core', 'multisite-install',
+              '--path=' ~ s_web, '--url=' ~ s_url, '--title=' ~ s_title,
+              '--admin_user=' ~ s_admin_user, '--admin_password=' ~ s_admin_pass,
+              '--admin_email=' ~ s_admin_email, '--skip-email']
+             + (['--subdomains'] if s_mode == 'subdomain' else []) }}
+        chdir: "{{ s_web }}"
+      when: wp_installed.rc | default(1) != 0 and s_type == 'multisite'
+      no_log: true
+
+    - name: Harden wp-config (no file editor, system cron, memory limit)
+      ansible.builtin.command:
+        argv: >-
+          {{ [wp_bin, 'config', 'set', item.k, item.v, '--path=' ~ s_web]
+             + (['--raw'] if item.raw else []) }}
+        chdir: "{{ s_web }}"
+      loop: >-
+        {{ [ {'k': 'DISALLOW_FILE_EDIT', 'v': 'true', 'raw': true},
+             {'k': 'DISABLE_WP_CRON',    'v': 'true', 'raw': true},
+             {'k': 'WP_MEMORY_LIMIT',    'v': '256M', 'raw': false} ]
+           + ([ {'k': 'FORCE_SSL_ADMIN', 'v': 'true', 'raw': true} ] if s_ssl else []) }}
+      loop_control:
+        label: "{{ item.k }}"
+      changed_when: false
+
+- name: wp-config.php readable only by the tenant
+  ansible.builtin.file:
+    path: "{{ s_web }}/wp-config.php"
+    owner: "{{ t_user }}"
+    group: "{{ t_user }}"
+    mode: "0640"
+
+# System cron replaces WP-Cron (every 5 min, as the tenant user)
+- name: WP cron job
+  ansible.builtin.cron:
+    name: "wp-cron {{ s_domain }}"
+    user: "{{ t_user }}"
+    minute: "*/5"
+    job: >-
+      {{ ('WP_CLI_CACHE_DIR=' ~ t_root ~ '/tmp/wp-cli-cache ' ~ wp_bin ~ ' site list --field=url --path=' ~ s_web
+          ~ ' | xargs -I{} env WP_CLI_CACHE_DIR=' ~ t_root ~ '/tmp/wp-cli-cache ' ~ wp_bin
+          ~ ' cron event run --due-now --url={} --path=' ~ s_web ~ ' >/dev/null 2>&1')
+         if s_type == 'multisite' else
+         ('WP_CLI_CACHE_DIR=' ~ t_root ~ '/tmp/wp-cli-cache ' ~ wp_bin
+          ~ ' cron event run --due-now --path=' ~ s_web ~ ' >/dev/null 2>&1') }}
+
+# ---------------- nginx + TLS (two passes: HTTP first, then HTTPS) ----------------
+- name: Existing certificate?
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ s_domain }}/fullchain.pem"
+  register: site_cert
+
+- name: nginx vhost (pass 1)
+  ansible.builtin.template:
+    src: vhost.conf.j2
+    dest: "/etc/nginx/sites-enabled/{{ s_domain }}.conf"
+    mode: "0644"
+  register: vhost_p1
+
+- name: Test + reload nginx
+  ansible.builtin.shell: nginx -t && systemctl reload nginx
+  changed_when: true
+  when: vhost_p1 is changed
+
+- name: Obtain Let's Encrypt certificate
+  ansible.builtin.command:
+    cmd: >-
+      certbot certonly
+      {{ '--dns-cloudflare --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini --dns-cloudflare-propagation-seconds 30'
+         if s_wildcard else '--webroot -w /var/www/letsencrypt' }}
+      --cert-name {{ s_domain }} --non-interactive --agree-tos -m {{ letsencrypt_email }}
+      {{ s_cert_domains | map('regex_replace', '^', '-d ') | join(' ') }}
+  when: s_ssl and not site_cert.stat.exists
+
+- name: Re-check certificate
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ s_domain }}/fullchain.pem"
+  register: site_cert
+
+- name: nginx vhost (pass 2 - enables HTTPS if cert exists)
+  ansible.builtin.template:
+    src: vhost.conf.j2
+    dest: "/etc/nginx/sites-enabled/{{ s_domain }}.conf"
+    mode: "0644"
+  register: vhost_p2
+
+- name: Test + reload nginx
+  ansible.builtin.shell: nginx -t && systemctl reload nginx
+  changed_when: true
+  when: vhost_p2 is changed

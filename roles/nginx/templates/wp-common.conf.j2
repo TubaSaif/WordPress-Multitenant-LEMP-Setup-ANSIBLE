@@ -1,0 +1,18 @@
+# Managed by Ansible - included by every WordPress vhost
+location = /favicon.ico { log_not_found off; access_log off; }
+location = /robots.txt  { try_files $uri /index.php?$args; log_not_found off; access_log off; }
+
+# hidden files (but allow ACME)
+location ~ /\.(?!well-known) { deny all; }
+
+# never execute PHP from uploads
+location ~* /(?:uploads|files)/.*\.php$ { deny all; }
+
+# info-leak files
+location ~* ^/(?:readme\.html|license\.txt|wp-config\.php|wp-config-sample\.php)$ { deny all; }
+
+# static assets
+location ~* \.(?:css|js|jpe?g|png|gif|ico|svg|webp|avif|woff2?|ttf|eot|mp4|webm)$ {
+    expires 30d;
+    access_log off;
+}

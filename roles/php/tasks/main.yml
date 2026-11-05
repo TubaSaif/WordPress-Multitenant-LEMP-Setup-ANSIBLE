@@ -1,0 +1,31 @@
+---
+- name: Install PHP-FPM and extensions
+  ansible.builtin.apt:
+    name:
+      - "php{{ php_version }}-fpm"
+      - "php{{ php_version }}-cli"
+      - "php{{ php_version }}-mysql"
+      - "php{{ php_version }}-curl"
+      - "php{{ php_version }}-gd"
+      - "php{{ php_version }}-mbstring"
+      - "php{{ php_version }}-xml"
+      - "php{{ php_version }}-zip"
+      - "php{{ php_version }}-intl"
+      - "php{{ php_version }}-soap"
+      - "php{{ php_version }}-bcmath"
+      - php-imagick
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: PHP-FPM global ini (shared by all pools)
+  ansible.builtin.template:
+    src: 99-wordpress.ini.j2
+    dest: "/etc/php/{{ php_version }}/fpm/conf.d/99-wordpress.ini"
+    mode: "0644"
+  notify: Restart php-fpm
+
+- name: Start PHP-FPM
+  ansible.builtin.service:
+    name: "php{{ php_version }}-fpm"
+    state: started
+    enabled: true

@@ -1,0 +1,18 @@
+#!/bin/bash
+# Managed by Ansible - nightly per-site DB dump + files tarball (local, {{ backup_keep_days }} days).
+# Ship /var/backups/tenants off-box (restic/rclone/borg) for real disaster recovery.
+set -uo pipefail
+umask 077
+DEST=/var/backups/tenants
+STAMP=$(date +%F)
+{% for tenant in tenants %}
+{% for site in tenant.sites | default([]) %}
+mkdir -p "$DEST/{{ tenant.name }}"
+runuser -u wp_{{ tenant.name }} -- env WP_CLI_CACHE_DIR={{ tenants_root }}/{{ tenant.name }}/tmp/wp-cli-cache \
+  {{ wp_bin }} db export - --path={{ tenants_root }}/{{ tenant.name }}/sites/{{ site.domain }}/public \
+  | gzip > "$DEST/{{ tenant.name }}/{{ site.domain }}-db-$STAMP.sql.gz" || echo "DB backup failed: {{ site.domain }}"
+tar -czf "$DEST/{{ tenant.name }}/{{ site.domain }}-files-$STAMP.tar.gz" \
+  -C {{ tenants_root }}/{{ tenant.name }}/sites/{{ site.domain }} public || echo "File backup failed: {{ site.domain }}"
+{% endfor %}
+{% endfor %}
+find "$DEST" -type f -mtime +{{ backup_keep_days }} -delete

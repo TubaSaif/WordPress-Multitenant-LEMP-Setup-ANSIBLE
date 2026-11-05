@@ -1,0 +1,88 @@
+---
+- name: Install nginx + certbot
+  ansible.builtin.apt:
+    name: [nginx, certbot, python3-certbot-dns-cloudflare]
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /var/www/letsencrypt
+    - /var/log/nginx/tenants
+
+- name: nginx.conf
+  ansible.builtin.template:
+    src: nginx.conf.j2
+    dest: /etc/nginx/nginx.conf
+    mode: "0644"
+    validate: "nginx -t -c %s"
+  notify: Reload nginx
+
+- name: Shared WordPress snippet
+  ansible.builtin.template:
+    src: wp-common.conf.j2
+    dest: /etc/nginx/snippets/wp-common.conf
+    mode: "0644"
+  notify: Reload nginx
+
+- name: Remove stock default site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Reload nginx
+
+- name: Catch-all default server (unknown hosts get dropped)
+  ansible.builtin.template:
+    src: default.conf.j2
+    dest: /etc/nginx/sites-enabled/00-default.conf
+    mode: "0644"
+  notify: Reload nginx
+
+- name: Rotate per-tenant logs
+  ansible.builtin.template:
+    src: logrotate-tenants.j2
+    dest: /etc/logrotate.d/nginx-tenants
+    mode: "0644"
+
+- name: Cloudflare credentials for wildcard certs
+  ansible.builtin.copy:
+    dest: /etc/letsencrypt/cloudflare.ini
+    content: "dns_cloudflare_api_token = {{ cloudflare_api_token }}\n"
+    mode: "0600"
+  when: cloudflare_api_token | length > 0
+  no_log: true
+
+- name: Check for existing Let's Encrypt certificates
+  ansible.builtin.stat:
+    path: /etc/letsencrypt/live
+  register: letsencrypt_live_directory
+
+- name: Ensure certificate renewal hook directory
+  ansible.builtin.file:
+    path: /etc/letsencrypt/renewal-hooks/deploy
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: letsencrypt_live_directory.stat.isdir | default(false)
+
+- name: Install nginx reload hook after certificate renewal
+  ansible.builtin.copy:
+    dest: /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+    content: |
+      #!/bin/sh
+      systemctl reload nginx
+    mode: "0755"
+  when: letsencrypt_live_directory.stat.isdir | default(false)
+
+- name: Start nginx
+  ansible.builtin.service:
+    name: nginx
+    state: started
+    enabled: true

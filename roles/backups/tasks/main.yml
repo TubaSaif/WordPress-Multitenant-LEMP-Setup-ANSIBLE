@@ -1,0 +1,24 @@
+---
+- name: Backup directory
+  ansible.builtin.file:
+    path: /var/backups/tenants
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Backup script
+  ansible.builtin.template:
+    src: wp-tenant-backup.sh.j2
+    dest: /usr/local/sbin/wp-tenant-backup
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Nightly backup cron
+  ansible.builtin.cron:
+    name: "wp tenant backups"
+    user: root
+    hour: "2"
+    minute: "30"
+    job: "/usr/local/sbin/wp-tenant-backup >/var/log/wp-tenant-backup.log 2>&1"

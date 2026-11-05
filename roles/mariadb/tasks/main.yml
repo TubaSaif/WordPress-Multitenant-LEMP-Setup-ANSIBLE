@@ -1,0 +1,24 @@
+---
+- name: Install MariaDB
+  ansible.builtin.apt:
+    name: [mariadb-server, mariadb-client]
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Tune MariaDB
+  ansible.builtin.template:
+    src: 99-wordpress.cnf.j2
+    dest: /etc/mysql/mariadb.conf.d/99-wordpress.cnf
+    mode: "0644"
+  notify: Restart mariadb
+
+- name: Start MariaDB
+  ansible.builtin.service:
+    name: mariadb
+    state: started
+    enabled: true
+
+- name: Drop test database
+  ansible.builtin.command:
+    argv: [mysql, -e, "DROP DATABASE IF EXISTS test"]
+  changed_when: false

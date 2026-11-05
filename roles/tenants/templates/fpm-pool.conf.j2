@@ -1,0 +1,33 @@
+; Managed by Ansible - tenant {{ tenant.name }}
+[{{ tenant.name }}]
+user  = {{ t_user }}
+group = {{ t_user }}
+
+listen = /run/php/php{{ php_version }}-fpm-{{ tenant.name }}.sock
+listen.owner = www-data
+listen.group = www-data
+listen.mode  = 0660
+
+; ondemand = idle tenants cost no RAM
+pm = ondemand
+pm.max_children = {{ tenant.php_max_children | default(php_pool_max_children) }}
+pm.process_idle_timeout = 20s
+pm.max_requests = 500
+
+security.limit_extensions = .php
+
+; --- isolation: tenant can only touch its own tree ---
+php_admin_value[open_basedir]    = {{ t_root }}/sites/:{{ t_root }}/tmp/:/dev/urandom
+php_admin_value[upload_tmp_dir]  = {{ t_root }}/tmp
+php_admin_value[sys_temp_dir]    = {{ t_root }}/tmp
+php_admin_value[session.save_path] = {{ t_root }}/tmp
+php_admin_value[disable_functions] = {{ tenant.php_disable_functions | default(php_disable_functions) }}
+{% if tenant.php_memory_limit is defined %}
+php_admin_value[memory_limit]    = {{ tenant.php_memory_limit }}
+{% endif %}
+
+; errors go to syslog/journald (tenant can't read other tenants' logs)
+php_admin_flag[log_errors]       = on
+php_admin_flag[display_errors]   = off
+php_admin_value[error_log]       = syslog
+php_admin_value[syslog.ident]    = php-fpm-{{ tenant.name }}

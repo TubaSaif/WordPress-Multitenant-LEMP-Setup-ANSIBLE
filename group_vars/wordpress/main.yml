@@ -1,0 +1,28 @@
+---
+# ---------- Platform ----------
+php_version: "8.5"            # Ubuntu 24.04 ships 8.3 (22.04 -> "8.1")
+timezone: "UTC"
+ssh_port: 22
+letsencrypt_email: "ops@example.com"
+tenants_root: /srv/tenants
+wp_locale: en_US
+wp_bin: /usr/local/bin/wp
+wp_cli_url: https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+
+# ---------- PHP ----------
+php_memory_limit: 256M
+php_upload_max: 64M
+php_max_execution_time: 120
+php_pool_max_children: 5      # default per tenant; override per tenant
+php_disable_functions: "exec,passthru,shell_exec,system,proc_open,popen,pcntl_exec,show_source,dl"
+
+# ---------- MariaDB ----------
+mariadb_innodb_buffer_pool_size: 512M   # ~50% of RAM on a DB-only box, less here
+mariadb_max_connections: 150
+
+# ---------- Backups ----------
+backup_keep_days: 7
+
+# ---------- DNS-01 wildcard certs (multisite subdomain) ----------
+# Put the real token in group_vars/wordpress/vault.yml (ansible-vault encrypted)
+cloudflare_api_token: ""

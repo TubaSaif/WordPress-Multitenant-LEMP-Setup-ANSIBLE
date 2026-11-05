@@ -1,0 +1,83 @@
+---
+- name: Check OS
+  ansible.builtin.assert:
+    that: ansible_distribution == 'Ubuntu'
+    fail_msg: "This project targets Ubuntu (24.04 recommended)."
+
+- name: Set timezone
+  community.general.timezone:
+    name: "{{ timezone }}"
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name: [ufw, fail2ban, unattended-upgrades, acl, cron, curl, unzip, logrotate]
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Enable unattended security upgrades
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+    mode: "0644"
+
+# ---- Firewall ----
+- name: UFW - rate-limit SSH
+  community.general.ufw:
+    rule: limit
+    port: "{{ ssh_port }}"
+    proto: tcp
+
+- name: UFW - allow web
+  community.general.ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop: ["80", "443"]
+
+- name: UFW - default deny + enable
+  community.general.ufw:
+    state: enabled
+    policy: deny
+
+- name: Ensure fail2ban is running
+  ansible.builtin.service:
+    name: fail2ban
+    state: started
+    enabled: true
+
+# ---- SFTP-only jail for tenants ----
+- name: Group for chrooted SFTP tenants
+  ansible.builtin.group:
+    name: sftp_tenants
+
+- name: Directory for tenant authorized_keys (root-owned, tenants can't edit)
+  ansible.builtin.file:
+    path: /etc/ssh/authorized_keys
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Tenant SSH policy
+  block:
+    - name: Install sshd drop-in
+      ansible.builtin.template:
+        src: sshd-tenants.conf.j2
+        dest: /etc/ssh/sshd_config.d/99-tenants.conf
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Reload ssh
+    - name: Validate sshd config
+      ansible.builtin.command: sshd -t
+      changed_when: false
+  rescue:
+    - name: Roll back broken sshd drop-in
+      ansible.builtin.file:
+        path: /etc/ssh/sshd_config.d/99-tenants.conf
+        state: absent
+    - name: Abort
+      ansible.builtin.fail:
+        msg: "sshd config validation failed; drop-in removed."

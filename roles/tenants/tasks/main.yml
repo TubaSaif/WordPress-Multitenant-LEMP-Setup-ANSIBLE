@@ -1,0 +1,51 @@
+---
+- name: Validate tenant definitions
+  ansible.builtin.assert:
+    that:
+      - tenants | map(attribute='name') | list | length == tenants | map(attribute='name') | unique | list | length
+      - tenants | map(attribute='name') | select('match', '^[a-z][a-z0-9_]{1,23}$') | list | length == tenants | length
+      - >-
+        (tenants | map(attribute='sites', default=[]) | flatten | map(attribute='domain') | list | length)
+        == (tenants | map(attribute='sites', default=[]) | flatten | map(attribute='domain') | unique | list | length)
+    fail_msg: "Tenant names must be unique [a-z0-9_] (2-24 chars) and domains must be unique across all tenants."
+    quiet: true
+
+- name: Provision tenants
+  ansible.builtin.include_tasks: tenant.yml
+  loop: "{{ tenants }}"
+  loop_control:
+    loop_var: tenant
+    label: "{{ tenant.name }}"
+
+- name: Remove the default PHP-FPM pool (tenants have their own)
+  ansible.builtin.file:
+    path: "/etc/php/{{ php_version }}/fpm/pool.d/www.conf"
+    state: absent
+  when: tenants | length > 0
+  notify: Reload php-fpm
+
+- name: fail2ban filter for failed WordPress logins
+  ansible.builtin.copy:
+    dest: /etc/fail2ban/filter.d/nginx-wp-login.conf
+    content: |
+      [Definition]
+      failregex = ^<HOST> .* "POST /wp-login\.php.*" 200
+      ignoreregex =
+    mode: "0644"
+  notify: Restart fail2ban
+
+- name: fail2ban jail for failed WordPress logins
+  ansible.builtin.copy:
+    dest: /etc/fail2ban/jail.d/nginx-wp-login.local
+    content: |
+      [nginx-wp-login]
+      enabled  = true
+      port     = http,https
+      filter   = nginx-wp-login
+      logpath  = /var/log/nginx/tenants/*/*.access.log
+      maxretry = 10
+      findtime = 10m
+      bantime  = 1h
+    mode: "0644"
+  when: tenants | length > 0
+  notify: Restart fail2ban

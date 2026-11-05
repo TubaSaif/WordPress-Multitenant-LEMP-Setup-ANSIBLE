@@ -1,0 +1,12 @@
+---
+- name: WordPress multi-tenant LEMP server
+  hosts: wordpress
+  become: true
+  roles:
+    - { role: base,    tags: [base] }
+    - { role: mariadb, tags: [db] }
+    - { role: php,     tags: [php] }
+    - { role: nginx,   tags: [nginx] }
+    - { role: wpcli,   tags: [wpcli] }
+    - { role: tenants, tags: [tenants] }
+    - { role: backups, tags: [backups] }

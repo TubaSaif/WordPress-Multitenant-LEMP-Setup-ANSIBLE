@@ -1,0 +1,70 @@
+# Managed by Ansible - tenant: {{ tenant.name }} - site: {{ s_domain }} ({{ s_type }})
+{% set cert = (site_cert.stat.exists | default(false)) and s_ssl %}
+{% set sock = '/run/php/php' ~ php_version ~ '-fpm-' ~ tenant.name ~ '.sock' %}
+{% if cert %}
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{ s_names | join(' ') }};
+    location ^~ /.well-known/acme-challenge/ { root /var/www/letsencrypt; }
+    location / { return 301 https://$host$request_uri; }
+}
+{% endif %}
+
+server {
+{% if cert %}
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    ssl_certificate     /etc/letsencrypt/live/{{ s_domain }}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{ s_domain }}/privkey.pem;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+{% else %}
+    listen 80;
+    listen [::]:80;
+{% endif %}
+    server_name {{ s_names | join(' ') }};
+
+    root {{ s_web }};
+    index index.php;
+    client_max_body_size {{ php_upload_max }};
+
+    access_log /var/log/nginx/tenants/{{ tenant.name }}/{{ s_domain }}.access.log;
+    error_log  /var/log/nginx/tenants/{{ tenant.name }}/{{ s_domain }}.error.log;
+
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    location ^~ /.well-known/acme-challenge/ { root /var/www/letsencrypt; }
+
+    include snippets/wp-common.conf;
+
+{% if s_type == 'multisite' and s_mode == 'subdirectory' %}
+    # Multisite (subdirectory) rewrites
+    if (!-e $request_filename) {
+        rewrite /wp-admin$ $scheme://$host$uri/ permanent;
+        rewrite ^(/[^/]*)?(/wp-.*) $2 last;
+        rewrite ^(/[^/]*)?(/.*\.php) $2 last;
+    }
+{% endif %}
+
+{% if not (site.allow_xmlrpc | default(false)) %}
+    location = /xmlrpc.php { deny all; }
+{% endif %}
+
+    location = /wp-login.php {
+        limit_req zone=wplogin burst=5 nodelay;
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:{{ sock }};
+    }
+
+    location / {
+        try_files $uri $uri/ /index.php?$args;
+    }
+
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:{{ sock }};
+        fastcgi_read_timeout {{ php_max_execution_time }}s;
+    }
+}

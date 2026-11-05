@@ -1,0 +1,74 @@
+---
+- name: Derive tenant facts
+  ansible.builtin.set_fact:
+    t_user: "wp_{{ tenant.name }}"
+    t_root: "{{ tenants_root }}/{{ tenant.name }}"
+
+- name: Tenant group
+  ansible.builtin.group:
+    name: "{{ t_user }}"
+
+- name: Tenant user (no shell, SFTP-only, chrooted)
+  ansible.builtin.user:
+    name: "{{ t_user }}"
+    group: "{{ t_user }}"
+    groups: sftp_tenants
+    append: true
+    home: "{{ t_root }}"
+    create_home: false
+    shell: /usr/sbin/nologin
+    comment: "WP tenant {{ tenant.name }}"
+
+- name: Chroot root (must be root-owned)
+  ansible.builtin.file:
+    path: "{{ t_root }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Sites directory (tenant writes, nginx reads, other tenants blocked)
+  ansible.builtin.file:
+    path: "{{ t_root }}/sites"
+    state: directory
+    owner: "{{ t_user }}"
+    group: www-data
+    mode: "0750"
+
+- name: Private tmp (uploads, sessions, wp-cli cache)
+  ansible.builtin.file:
+    path: "{{ t_root }}/tmp"
+    state: directory
+    owner: "{{ t_user }}"
+    group: "{{ t_user }}"
+    mode: "0700"
+
+- name: Tenant nginx log directory (root-owned)
+  ansible.builtin.file:
+    path: "/var/log/nginx/tenants/{{ tenant.name }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: SFTP authorized keys
+  ansible.builtin.copy:
+    dest: "/etc/ssh/authorized_keys/{{ t_user }}"
+    content: "{{ (tenant.ssh_keys | default([])) | join('\n') }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Dedicated PHP-FPM pool
+  ansible.builtin.template:
+    src: fpm-pool.conf.j2
+    dest: "/etc/php/{{ php_version }}/fpm/pool.d/{{ tenant.name }}.conf"
+    mode: "0644"
+  notify: Reload php-fpm
+
+- name: Provision sites
+  ansible.builtin.include_tasks: site.yml
+  loop: "{{ tenant.sites | default([]) }}"
+  loop_control:
+    loop_var: site
+    label: "{{ site.domain }}"

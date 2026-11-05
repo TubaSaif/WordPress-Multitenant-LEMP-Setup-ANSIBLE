@@ -1,0 +1,19 @@
+---
+# One entry per customer. Add/remove entries and re-run:
+#   ansible-playbook site.yml --tags tenants
+#
+# tenant.name   : lowercase [a-z0-9_], 2-24 chars (Linux user becomes wp_<name>)
+# site.type     : single (default) | multisite
+# site.multisite_mode : subdomain (default) | subdirectory
+# site.ssl      : true (default). Set false until DNS points at the server.
+# site.wildcard_ssl : true => DNS-01 wildcard cert (needs Cloudflare token); use for multisite subdomain
+tenants:
+  - name: tuba
+    email: tuba@example.com
+    ssh_keys:
+      - "ssh-ed25519 AAAAC3...replace tuba@laptop"
+    php_max_children: 5
+    sites:
+      - domain: tuba-blog.example.com
+        aliases: [www.tuba-blog.example.com]
+        title: "Tuba's Blog"

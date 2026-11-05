@@ -1,0 +1,11 @@
+# Managed by Ansible
+[mysqld]
+bind-address                   = 127.0.0.1
+skip-name-resolve
+character-set-server           = utf8mb4
+collation-server               = utf8mb4_unicode_ci
+innodb_buffer_pool_size        = {{ mariadb_innodb_buffer_pool_size }}
+innodb_file_per_table          = 1
+innodb_flush_log_at_trx_commit = 2
+max_connections                = {{ mariadb_max_connections }}
+max_allowed_packet             = 64M

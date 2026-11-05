@@ -1,0 +1,16 @@
+---
+# Managed nodes. Only SSH + Python are needed on them (no Ansible install).
+all:
+  children:
+    wordpress:
+      hosts:
+        vps1:
+          ansible_host: 192.168.10.10     # <-- your VPS IP
+          ansible_user: tubasaifansible              # or a sudo user
+          ansible_password: abc123
+          ansible_port: 22
+          ansible_become_password: abc123
+          ansible_ssh_common_args: -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes
+            -o UserKnownHostsFile=/home/tubasaifansible/wp-multitenant/panel/data/known_hosts
+          ansible_python_interpreter: /usr/bin/python3
+          ansible_become_exe: /usr/bin/sudo.ws

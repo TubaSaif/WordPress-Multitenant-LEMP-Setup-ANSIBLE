@@ -1,0 +1,16 @@
+; Managed by Ansible
+expose_php = Off
+cgi.fix_pathinfo = 0
+memory_limit = {{ php_memory_limit }}
+upload_max_filesize = {{ php_upload_max }}
+post_max_size = {{ php_upload_max }}
+max_execution_time = {{ php_max_execution_time }}
+max_input_vars = 5000
+realpath_cache_size = 4096k
+realpath_cache_ttl = 600
+opcache.enable = 1
+opcache.memory_consumption = 192
+opcache.interned_strings_buffer = 16
+opcache.max_accelerated_files = 20000
+opcache.validate_timestamps = 1
+opcache.revalidate_freq = 10
